@@ -16,13 +16,12 @@ import androidx.lifecycle.viewModelScope
 import com.google.android.gms.common.api.ResolvableApiException
 import com.google.android.gms.location.*
 import kotlinx.coroutines.channels.awaitClose
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
 abstract class LocationViewModel(
     private val locationRequest: LocationRequest,
+    private val locationSettingsRequest: LocationSettingsRequest,
     private val locationProvider: FusedLocationProviderClient
 ): ViewModel() {
     private val _gpsStatusFlow = MutableStateFlow<GpsStatus>(GpsStatus.NotChecked)
@@ -33,21 +32,23 @@ abstract class LocationViewModel(
 
     @SuppressLint("MissingPermission")
     val locationFlow = callbackFlow<Location> {
+        permissionStatusFlow
+            .takeWhile { it !is PermissionStatus.Granted }
+            .collect()
+
         val callback = object : LocationCallback() {
-            // 4.
             override fun onLocationResult(result: LocationResult) {
                 super.onLocationResult(result)
                 trySend(result.lastLocation)
             }
         }
-        // 3.
+
         locationProvider.requestLocationUpdates(
             locationRequest,
             callback,
             Looper.getMainLooper()
         )
 
-        // 5.
         awaitClose {
             locationProvider.removeLocationUpdates(callback)
         }
@@ -59,13 +60,9 @@ abstract class LocationViewModel(
     )
 
     fun checkGps(activity: Activity) {
-
-        val builder = LocationSettingsRequest
-            .Builder()
-            .addLocationRequest(locationRequest)
         val task = LocationServices
             .getSettingsClient(activity)
-            .checkLocationSettings(builder.build())
+            .checkLocationSettings(locationSettingsRequest)
 
         task.addOnSuccessListener {
             emitGpsStatus(GpsStatus.Enabled)
@@ -74,9 +71,7 @@ abstract class LocationViewModel(
         task.addOnFailureListener { exception ->
             if (exception is ResolvableApiException) {
                 try {
-                    // 1.
                     emitGpsStatus(GpsStatus.Prompting)
-                    // 2.
                     exception.startResolutionForResult(
                         activity,
                         RequestCodes.REQUEST_CHECK_SETTINGS
